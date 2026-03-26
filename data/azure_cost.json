@@ -1,0 +1,11 @@
+{
+  "app_service": {
+    "cost_per_month": "$300"
+  },
+  "sql_database": {
+    "cost_per_month": "$200"
+  },
+  "storage_account": {
+    "cost_per_month": "$50"
+  }
+}

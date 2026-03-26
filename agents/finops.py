@@ -8,8 +8,38 @@ load_dotenv()
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 llm = ChatGroq(model_name="llama-3.1-8b-instant", temperature=0.5)
 
+mock_azure_metrics = {
+    "app_service": {
+        "cpu_utilization": "25%",
+        "memory_utilization": "40%",
+        "instance_count": 2,
+        "autoscaling_enabled": False
+    },
+    "sql_database": {
+        "dtus": 100,
+        "utilization": "60%",
+        "cost_per_month": "$200"
+    },
+    "storage_account": {
+        "total_storage_gb": 500,
+        "active_storage_gb": 50,
+        "cost_per_month": "$50"
+    }
+}
 
-def finops_agent(azure_metrics, azure_cost):
+mock_azure_cost = {
+    "app_service": {
+        "cost_per_month": "$300"
+    },
+    "sql_database": {
+        "cost_per_month": "$200"
+    },
+    "storage_account": {
+        "cost_per_month": "$50"
+    }
+}
+
+def finops_agent(azure_metrics=mock_azure_metrics, azure_cost=mock_azure_cost):
   prompt = f"""You are a Senior Azure FinOps Architect.
 
   Your responsibility is STRICTLY cost optimization.
@@ -111,21 +141,66 @@ def finops_agent(azure_metrics, azure_cost):
   No commentary.
   No explanation outside JSON.
   """
-  response = llm.invoke(prompt)
-  response_text = response.content.strip()
-    
-  proposals = []
   try:
-      start_idx = response_text.find('[')
-      end_idx = response_text.rfind(']') + 1
-      if start_idx != -1 and end_idx > start_idx:
-          json_str = response_text[start_idx:end_idx]
-          proposals = json.loads(json_str)
-      else:
-          proposals = json.loads(response_text)
+      response = llm.invoke(prompt)
+      response_text = response.content.strip() if response and response.content else ""
       
-      if not isinstance(proposals, list):
-          proposals = [{"description": response_text, "estimated_savings": "TBD", "complexity": "Unknown", "affected_services": []}]
-  except json.JSONDecodeError:
-      proposals = [{"description": response_text, "estimated_savings": "TBD", "complexity": "Unknown", "affected_services": []}]
-  return proposals
+      # Check if response is empty
+      if not response_text:
+          print("⚠️ FinOps Agent received empty response from LLM")
+          return {
+              "cost_inefficiencies": [{
+                  "issue_detected": "Unable to analyze cost data",
+                  "recommendation": "Ensure Azure metrics and cost data are properly loaded",
+                  "estimated_savings": "Unknown",
+                  "risk_level": "Low",
+                  "affected_services": [],
+                  "confidence_level": "Low"
+              }],
+              "total_potential_savings": "Unknown",
+              "analysis_status": "incomplete"
+          }
+      
+      proposals = []
+      try:
+          start_idx = response_text.find('[')
+          end_idx = response_text.rfind(']') + 1
+          if start_idx != -1 and end_idx > start_idx:
+              json_str = response_text[start_idx:end_idx]
+              proposals = json.loads(json_str)
+          else:
+              proposals = json.loads(response_text)
+          
+          if not isinstance(proposals, list):
+              proposals = [{"issue_detected": "Analysis completed", "recommendation": response_text, "estimated_savings": "TBD", "risk_level": "Low", "affected_services": [], "confidence_level": "Low"}]
+      except json.JSONDecodeError as e:
+          print(f"⚠️ Failed to parse JSON response: {str(e)}")
+          proposals = [{
+              "issue_detected": "Cost analysis completed with parsing note",
+              "recommendation": response_text[:200] if len(response_text) > 200 else response_text,
+              "estimated_savings": "TBD",
+              "risk_level": "Low",
+              "affected_services": [],
+              "confidence_level": "Low"
+          }]
+      
+      # Return as JSON object instead of list
+      return {
+          "cost_inefficiencies": proposals,
+          "total_potential_savings": "See individual recommendations",
+          "analysis_status": "completed"
+      }
+  except Exception as e:
+      print(f"❌ FinOps Agent error: {str(e)}")
+      return {
+          "cost_inefficiencies": [{
+              "issue_detected": f"FinOps analysis failed: {str(e)[:100]}",
+              "recommendation": "Review error logs and retry analysis",
+              "estimated_savings": "Error",
+              "risk_level": "Low",
+              "affected_services": [],
+              "confidence_level": "Low"
+          }],
+          "total_potential_savings": "Error",
+          "analysis_status": "failed"
+      }

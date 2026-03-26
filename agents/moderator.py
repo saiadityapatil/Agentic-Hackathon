@@ -153,9 +153,7 @@ mock_azure_cost = {
     }
 }
 
-finops_output = finops_agent(mock_azure_metrics, mock_azure_cost)
 
-print(json.dumps(finops_output, indent=2))
 
 
 mock_architecture_output ={
@@ -253,6 +251,3 @@ mock_performance_output = [
 ]
 
 
-print("Moderator Agent Evaluation:")
-moderator_evaluation = moderator_agent(finops_output, mock_architecture_output, mock_performance_output)
-print(json.dumps(moderator_evaluation, indent=2))

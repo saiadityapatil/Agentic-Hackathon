@@ -1,31 +1,32 @@
-from typing import TypedDict, List, Optional, Dict, Any
+from typing import TypedDict, Optional, Annotated
+from typing_extensions import NotRequired
+from langgraph.graph import add_messages
 
 
-class AgentState(TypedDict):
-    """Shared state across all agents in the multi-agent system.
-    
-    This state is passed through the graph and updated by each agent node.
-    Agents communicate their findings through this shared state.
+def merge_output(left, right):
+    """Merge function for concurrent node outputs"""
+    if right is not None:
+        return right
+    return left
+
+
+class State(TypedDict):
     """
-    # Infrastructure & Code data
-    terraform_config: str  # Terraform configuration content
-    cloud_stats: Dict[str, Any]  # Cloud metrics (AWS/Azure)
-    code_analysis: Optional[Dict[str, Any]]  # Code structure analysis from code_summarizer
-    git_diff: Optional[str]  # Git diff/changes for code impact analysis
+    State schema for the LangChain workflow.
     
-    # Agent outputs (findings)
-    architecture_feedback: Optional[List[Dict]]  # Architecture agent findings
-    performance_feedback: Optional[List[Dict]]  # Performance agent findings
-    finops_proposals: Optional[List[Dict]]  # FinOps cost optimization proposals
-    change_analysis: Optional[Dict[str, Any]]  # Code change impact analysis
-    
-    # Moderation & Decision Making
-    conflicts_detected: Optional[List[Dict]]  # Conflicts identified by moderator
-    ranked_recommendations: Optional[List[Dict]]  # Prioritized recommendations
-    final_recommendation: Optional[str]  # Final decision from moderator
-    implementation_plan: Optional[Dict[str, List[str]]]  # Actionable plan
-    
-    # Metadata
-    turn_count: int  # Track number of agent turns
-    negotiation_history: List[str]  # Historical context of agent discussions
-    status: str  # Current workflow status (e.g., "running", "completed", "error")
+    Attributes:
+        repo_url: GitHub repository URL to analyze
+        code_summarizer_output: Output from code summarizer agent
+        architecture_output: Output from architecture agent
+        performance_output: Output from performance agent (concurrent update)
+        finops_output: Output from finops agent (concurrent update)
+        moderator_output: Final synthesized output from moderator agent
+        final_analysis: Formatted final analysis result
+    """
+    repo_url: str
+    code_summarizer_output: NotRequired[Optional[dict]]
+    architecture_output: NotRequired[Optional[dict]]
+    performance_output: Annotated[Optional[dict], merge_output]
+    finops_output: Annotated[Optional[dict], merge_output]
+    moderator_output: NotRequired[Optional[dict]]
+    final_analysis: NotRequired[Optional[str]]

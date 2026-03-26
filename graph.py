@@ -1,285 +1,260 @@
-"""Multi-agent orchestration graph for infrastructure analysis and decision making.
-
-This module defines the LangGraph state machine that coordinates all agents:
-1. Architecture Agent - Evaluates infrastructure design
-2. Performance Agent - Assesses performance implications
-3. FinOps Agent - Identifies cost optimizations
-4. Change Agent - Analyzes code change impact
-5. Moderator Agent - Synthesizes and prioritizes recommendations
-
-Agents communicate through shared AgentState, with the moderator producing final decisions.
-"""
-
 import json
-from typing import Dict, Any, List
 from langgraph.graph import StateGraph, END
-from state import AgentState
-from agents.architecture import architecture_agent
-from agents.performance import performance_agent
-from agents.change import change_agent
-from agents.finops import finops_agent
+from state import State
+from agents.code_summarizer import code_summarizer_agent
 from agents.moderator import moderator_agent
+from agents.finops import finops_agent
+from event_emitter import agent_emitter
 
 
-def initialize_state(
-    terraform_config: str = "",
-    cloud_stats: Dict[str, Any] = None,
-    git_diff: str = "",
-    code_analysis: Dict[str, Any] = None
-) -> AgentState:
-    """Initialize the agent state with input data.
-    
-    Args:
-        terraform_config: Terraform configuration content
-        cloud_stats: Cloud service metrics and statistics
-        git_diff: Git diff showing code changes
-        code_analysis: Code structure analysis from code_summarizer
-        
-    Returns:
-        Initialized AgentState dictionary
+def code_summarizer_node(state: State) -> dict:
     """
-    return {
-        "terraform_config": terraform_config,
-        "cloud_stats": cloud_stats or {},
-        "code_analysis": code_analysis,
-        "git_diff": git_diff,
-        "architecture_feedback": None,
-        "performance_feedback": None,
-        "finops_proposals": None,
-        "change_analysis": None,
-        "conflicts_detected": None,
-        "ranked_recommendations": None,
-        "final_recommendation": None,
-        "implementation_plan": None,
-        "turn_count": 0,
-        "negotiation_history": [],
-        "status": "initialized"
-    }
-
-
-def create_analysis_graph() -> StateGraph:
-    """Create the multi-agent orchestration graph.
-    
-    The graph follows this flow:
-    1. Start -> Architecture Agent (evaluates design)
-    2. Architecture -> Performance Agent (assesses performance)
-    3. Architecture -> FinOps Agent (identifies cost optimizations)
-    4. Architecture -> Change Agent (analyzes code impact)
-    5. All agents -> Moderator Agent (synthesizes recommendations)
-    6. Moderator -> End (generates final plan)
-    
-    Returns:
-        Compiled LangGraph StateGraph
+    Execute code summarizer agent with the repository URL.
+    Stores the output in state for downstream agents.
     """
-    workflow = StateGraph(AgentState)
+    print(f"🔍 Running Code Summarizer on: {state['repo_url']}")
+    agent_emitter.emit_agent_started("code_summarizer")
     
-    # Define agent nodes
-    workflow.add_node("architecture", architecture_node)
-    workflow.add_node("performance", performance_node)
-    workflow.add_node("finops", finops_node)
-    workflow.add_node("change", change_node)
-    workflow.add_node("moderator", moderator_node)
-    
-    # Define control flow
-    workflow.set_entry_point("architecture")
-    
-    # Architecture triggers other agents in parallel
-    workflow.add_edge("architecture", "performance")
-    workflow.add_edge("architecture", "finops")
-    workflow.add_edge("architecture", "change")
-    
-    # All gather at moderator
-    workflow.add_edge("performance", "moderator")
-    workflow.add_edge("finops", "moderator")
-    workflow.add_edge("change", "moderator")
-    
-    # Moderator produces final output
-    workflow.add_edge("moderator", END)
-    
-    return workflow.compile()
-
-
-def architecture_node(state: AgentState) -> AgentState:
-    """Node wrapper for architecture agent with error handling.
-    
-    Args:
-        state: Current agent state
-        
-    Returns:
-        Updated state with architecture_feedback
-    """
     try:
-        result = architecture_agent(state)
-        state.update(result)
-        state["status"] = "architecture_complete"
+        output = code_summarizer_agent(state, state['repo_url'])
+        print("✅ Code Summarizer completed")
+        agent_emitter.emit_agent_completed("code_summarizer", output)
+        return {"code_summarizer_output": output}
     except Exception as e:
-        print(f"Architecture agent error: {e}")
-        state["status"] = "architecture_error"
-        state["architecture_feedback"] = [{"error": str(e)}]
-    
-    return state
+        print(f"❌ Code Summarizer failed: {str(e)}")
+        agent_emitter.emit_agent_error("code_summarizer", str(e))
+        return {"code_summarizer_output": {"error": str(e)}}
 
 
-def performance_node(state: AgentState) -> AgentState:
-    """Node wrapper for performance agent with error handling.
-    
-    Args:
-        state: Current agent state (includes architecture_feedback)
-        
-    Returns:
-        Updated state with performance_feedback
+def architecture_node(state: State) -> dict:
     """
+    Execute architecture agent.
+    Takes code_summarizer_output as input for analysis.
+    Currently returns dummy output for demo/testing.
+    """
+    print("🏗️ Running Architecture Agent")
+    agent_emitter.emit_agent_started("architecture")
+    
     try:
-        result = performance_agent(state)
-        state.update(result)
-        state["status"] = "performance_complete"
-    except Exception as e:
-        print(f"Performance agent error: {e}")
-        state["status"] = "performance_error"
-        state["performance_feedback"] = [{"error": str(e)}]
-    
-    return state
-
-
-def finops_node(state: AgentState) -> AgentState:
-    """Node wrapper for FinOps agent with error handling.
-    
-    Args:
-        state: Current agent state (includes architecture_feedback)
+        # For demo purposes, return dummy output
+        # In production, this would process code_summarizer_output
+        code_summary = state.get('code_summarizer_output', {})
         
-    Returns:
-        Updated state with finops_proposals
+        dummy_output = {
+            "issues_detected": [
+                "No autoscaling configured",
+                "Database-centric architecture",
+                "Single region deployment"
+            ],
+            "recommendations": [
+                "Enable autoscaling on App Service",
+                "Add Redis caching layer",
+                "Consider multi-region setup"
+            ],
+            "framework": "FastAPI",
+            "language": "Python",
+            "project_structure": {
+                "layered_architecture": True,
+                "separate_service_layer": True,
+                "repository_pattern": False,
+                "monolithic": False,
+                "microservice_ready": True,
+                "circular_imports_detected": False
+            },
+            "api_design": {
+                "route_count": 12,
+                "uses_dependency_injection": True,
+                "uses_pydantic_models": True,
+                "validation_present": True,
+                "pagination_supported": True
+            }
+        }
+        
+        print("✅ Architecture Agent completed (dummy output)")
+        agent_emitter.emit_agent_completed("architecture", dummy_output)
+        return {"architecture_output": dummy_output}
+    except Exception as e:
+        print(f"❌ Architecture Agent failed: {str(e)}")
+        agent_emitter.emit_agent_error("architecture", str(e))
+        return {"architecture_output": {"error": str(e)}}
+
+
+def performance_node(state: State) -> dict:
     """
+    Execute performance agent.
+    Currently returns dummy output for demo/testing.
+    """
+    print("⚡ Running Performance Agent")
+    agent_emitter.emit_agent_started("performance")
+    
     try:
-        result = finops_agent(state.get('cloud_stats', {}), {})
-        state["finops_proposals"] = result if isinstance(result, list) else [result]
+        # For demo purposes, return dummy output
+        dummy_output = {
+            "issues_detected": [
+                "CPU utilization consistently low (25%)",
+                "No dynamic scaling policies",
+                "Cold start latency detected"
+            ],
+            "recommendations": [
+                "Implement autoscaling rules",
+                "Configure pre-warming",
+                "Optimize connection pooling"
+            ],
+            "response_time_analysis": {
+                "average_response_time_ms": 145,
+                "p95_response_time_ms": 320,
+                "p99_response_time_ms": 580
+            },
+            "throughput": {
+                "requests_per_second": 450,
+                "concurrent_connections_capacity": 1000,
+                "current_load_percentage": 35
+            },
+            "bottlenecks": [
+                "Database query on user endpoint taking 120ms",
+                "Serialization overhead in list endpoints"
+            ]
+        }
         
-        finops_msg = f"FINOPS (analysis):\n" + json.dumps(result, indent=2)
-        state["negotiation_history"] = state.get("negotiation_history", []) + [finops_msg]
-        state["status"] = "finops_complete"
+        print("✅ Performance Agent completed (dummy output)")
+        agent_emitter.emit_agent_completed("performance", dummy_output)
+        return {"performance_output": dummy_output}
     except Exception as e:
-        print(f"FinOps agent error: {e}")
-        state["status"] = "finops_error"
-        state["finops_proposals"] = [{"error": str(e)}]
-    
-    return state
+        print(f"❌ Performance Agent failed: {str(e)}")
+        agent_emitter.emit_agent_error("performance", str(e))
+        return {"performance_output": {"error": str(e)}}
 
 
-def change_node(state: AgentState) -> AgentState:
-    """Node wrapper for change agent with error handling.
-    
-    Args:
-        state: Current agent state (includes architecture_feedback)
-        
-    Returns:
-        Updated state with change_analysis
+def finops_node(state: State) -> dict:
     """
+    Execute finops agent.
+    Analyzes cost optimization opportunities.
+    """
+    print("💰 Running FinOps Agent")
+    agent_emitter.emit_agent_started("finops")
+    
     try:
-        result = change_agent(state)
-        state.update(result)
-        state["status"] = "change_complete"
-    except Exception as e:
-        print(f"Change agent error: {e}")
-        state["status"] = "change_error"
-        state["change_analysis"] = {"error": str(e)}
-    
-    return state
-
-
-def moderator_node(state: AgentState) -> AgentState:
-    """Node wrapper for moderator agent that synthesizes all outputs.
-    
-    The moderator receives findings from all agents and produces:
-    - Conflict detection
-    - Prioritized recommendations
-    - Implementation plan (immediate, short-term, long-term)
-    
-    Args:
-        state: Current agent state (includes all agent outputs)
+        # Get Azure metrics and costs from data
+        import os
+        from agents.finops import finops_agent, mock_azure_metrics, mock_azure_cost
         
-    Returns:
-        Updated state with moderator decisions and final_recommendation
+        data_dir = os.path.join(os.path.dirname(__file__), 'data')
+        
+        azure_metrics_path = os.path.join(data_dir, 'azure_metrics.json')
+        azure_cost_path = os.path.join(data_dir, 'azure_cost.json')
+        
+        # Default to mock data
+        azure_metrics = mock_azure_metrics
+        azure_cost = mock_azure_cost
+        
+        # Try to load from files, fallback to mock data if files are empty or invalid
+        try:
+            if os.path.exists(azure_metrics_path) and os.path.getsize(azure_metrics_path) > 0:
+                with open(azure_metrics_path, 'r') as f:
+                    loaded_metrics = json.load(f)
+                    if loaded_metrics:  # Only use if not empty
+                        azure_metrics = loaded_metrics
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"⚠️  Could not load azure_metrics.json, using mock data: {str(e)}")
+        
+        try:
+            if os.path.exists(azure_cost_path) and os.path.getsize(azure_cost_path) > 0:
+                with open(azure_cost_path, 'r') as f:
+                    loaded_cost = json.load(f)
+                    if loaded_cost:  # Only use if not empty
+                        azure_cost = loaded_cost
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"⚠️  Could not load azure_cost.json, using mock data: {str(e)}")
+        
+        output = finops_agent(azure_metrics, azure_cost)
+        print("✅ FinOps Agent completed")
+        agent_emitter.emit_agent_completed("finops", output)
+        return {"finops_output": output}
+    except Exception as e:
+        print(f"❌ FinOps Agent failed: {str(e)}")
+        agent_emitter.emit_agent_error("finops", str(e))
+        return {"finops_output": {"error": str(e)}}
+
+
+def moderator_node(state: State) -> dict:
     """
+    Execute moderator agent.
+    Takes outputs from architecture, performance, and finops agents.
+    Synthesizes and prioritizes recommendations.
+    """
+    print("🎯 Running Moderator Agent")
+    agent_emitter.emit_agent_started("moderator")
+    
     try:
-        arch_output = json.dumps(state.get("architecture_feedback", []), indent=2)
-        perf_output = json.dumps(state.get("performance_feedback", []), indent=2)
-        finops_output = json.dumps(state.get("finops_proposals", []), indent=2)
+        architecture_output = state.get('architecture_output', {})
+        performance_output = state.get('performance_output', {})
+        finops_output = state.get('finops_output', {})
         
-        # Call moderator agent
-        moderator_result = moderator_agent(finops_output, arch_output, perf_output)
+        output = moderator_agent(finops_output, architecture_output, performance_output)
         
-        # Extract moderator decision
-        if isinstance(moderator_result, dict):
-            state["conflicts_detected"] = moderator_result.get("conflicts_detected", [])
-            state["ranked_recommendations"] = moderator_result.get("ranked_recommendations", [])
-            state["implementation_plan"] = moderator_result.get("implementation_plan", {})
-            
-            # Generate final recommendation
-            state["final_recommendation"] = generate_final_recommendation(moderator_result)
+        # Create final analysis summary
+        final_analysis = {
+            "status": "completed",
+            "code_summarizer": state.get('code_summarizer_output', {}),
+            "architecture": architecture_output,
+            "performance": performance_output,
+            "finops": finops_output,
+            "moderator_synthesis": output
+        }
         
-        state["status"] = "moderator_complete"
+        print("✅ Moderator Agent completed")
+        agent_emitter.emit_agent_completed("moderator", output)
+        return {
+            "moderator_output": output,
+            "final_analysis": json.dumps(final_analysis, indent=2)
+        }
     except Exception as e:
-        print(f"Moderator agent error: {e}")
-        state["status"] = "moderator_error"
-        state["final_recommendation"] = f"Error in decision making: {str(e)}"
-    
-    return state
+        print(f"❌ Moderator Agent failed: {str(e)}")
+        agent_emitter.emit_agent_error("moderator", str(e))
+        return {
+            "moderator_output": {"error": str(e)},
+            "final_analysis": json.dumps({"status": "failed", "error": str(e)})
+        }
 
 
-def generate_final_recommendation(moderator_result: Dict[str, Any]) -> str:
-    """Generate human-readable final recommendation from moderator output.
-    
-    Args:
-        moderator_result: Moderator agent decision dictionary
-        
-    Returns:
-        Formatted final recommendation string
+def build_graph():
     """
-    recommendation = "=== INFRASTRUCTURE DECISION ===\n\n"
+    Build the LangChain StateGraph with the following execution flow:
     
-    # Conflicts
-    conflicts = moderator_result.get("conflicts_detected", [])
-    if conflicts:
-        recommendation += "CONFLICTS ADDRESSED:\n"
-        for conflict in conflicts:
-            recommendation += f"  - {conflict.get('description', 'Unknown conflict')}\n"
-            recommendation += f"    Resolution: {conflict.get('resolution_decision', 'TBD')}\n"
-        recommendation += "\n"
+    1. code_summarizer_node (runs first)
+    2. architecture_node (sequential - uses code_summarizer output)
+    3. performance_node & finops_node (run in parallel)
+    4. moderator_node (runs last - consumes all three outputs)
+    """
+    graph = StateGraph(State)
     
-    # Top recommendations
-    recommendations = moderator_result.get("ranked_recommendations", [])
-    if recommendations:
-        recommendation += "PRIORITIZED RECOMMENDATIONS:\n"
-        for rec in recommendations[:5]:  # Top 5
-            rank = rec.get("rank", "?")
-            rec_text = rec.get("recommendation", "Unknown")
-            impact = rec.get("impact", "Unknown")
-            risk = rec.get("risk", "Unknown")
-            recommendation += f"  {rank}. {rec_text}\n"
-            recommendation += f"     Impact: {impact} | Risk: {risk}\n"
-        recommendation += "\n"
+    # Add nodes
+    graph.add_node("code_summarizer", code_summarizer_node)
+    graph.add_node("architecture", architecture_node)
+    graph.add_node("performance", performance_node)
+    graph.add_node("finops", finops_node)
+    graph.add_node("moderator", moderator_node)
     
-    # Implementation plan
-    plan = moderator_result.get("implementation_plan", {})
-    if plan:
-        recommendation += "IMPLEMENTATION ROADMAP:\n"
-        
-        immediate = plan.get("immediate_actions", [])
-        if immediate:
-            recommendation += "  Immediate Actions (Next 1-2 weeks):\n"
-            for action in immediate[:3]:
-                recommendation += f"    • {action}\n"
-        
-        short_term = plan.get("short_term", [])
-        if short_term:
-            recommendation += "  Short-term (1-2 months):\n"
-            for action in short_term[:3]:
-                recommendation += f"    • {action}\n"
-        
-        long_term = plan.get("long_term", [])
-        if long_term:
-            recommendation += "  Long-term (3+ months):\n"
-            for action in long_term[:3]:
-                recommendation += f"    • {action}\n"
+    # Set entry point
+    graph.set_entry_point("code_summarizer")
     
-    return recommendation
+    # Define execution flow
+    # After code_summarizer, architecture must run (sequential dependency)
+    graph.add_edge("code_summarizer", "architecture")
+    
+    # After architecture, performance and finops run in parallel
+    graph.add_edge("architecture", "performance")
+    graph.add_edge("architecture", "finops")
+    
+    # Both performance and finops lead to moderator
+    graph.add_edge("performance", "moderator")
+    graph.add_edge("finops", "moderator")
+    
+    # Moderator is the end
+    graph.set_finish_point("moderator")
+    
+    return graph.compile()
+
+
+# Compile the graph
+workflow = build_graph()
