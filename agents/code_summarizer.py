@@ -199,4 +199,3 @@ CODE FILES:
         architectural_analysis = {"error": "Failed to parse JSON response", "raw_response": response_text}
     return architectural_analysis
 
-print(code_summarizer_agent({}, "https://github.com/Saiaditya004/agent-app.git"))

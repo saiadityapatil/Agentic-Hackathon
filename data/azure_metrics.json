@@ -1,0 +1,18 @@
+{
+  "app_service": {
+    "cpu_utilization": "25%",
+    "memory_utilization": "40%",
+    "instance_count": 2,
+    "autoscaling_enabled": false
+  },
+  "sql_database": {
+    "dtus": 100,
+    "utilization": "60%",
+    "cost_per_month": "$200"
+  },
+  "storage_account": {
+    "total_storage_gb": 500,
+    "active_storage_gb": 50,
+    "cost_per_month": "$50"
+  }
+}
