@@ -1,10 +1,24 @@
 import json
+import os
 from langgraph.graph import StateGraph, END
 from state import State
 from agents.code_summarizer import code_summarizer_agent
 from agents.moderator import moderator_agent
 from agents.finops import finops_agent
+from agents.architecture import architecture_agent
+from agents.performance import performance_agent
 from event_emitter import agent_emitter
+
+
+def _load_json_if_present(path: str) -> dict:
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 
 def code_summarizer_node(state: State) -> dict:
@@ -30,49 +44,20 @@ def architecture_node(state: State) -> dict:
     """
     Execute architecture agent.
     Takes code_summarizer_output as input for analysis.
-    Currently returns dummy output for demo/testing.
     """
     print("🏗️ Running Architecture Agent")
     agent_emitter.emit_agent_started("architecture")
     
     try:
-        # For demo purposes, return dummy output
-        # In production, this would process code_summarizer_output
-        code_summary = state.get('code_summarizer_output', {})
-        
-        dummy_output = {
-            "issues_detected": [
-                "No autoscaling configured",
-                "Database-centric architecture",
-                "Single region deployment"
-            ],
-            "recommendations": [
-                "Enable autoscaling on App Service",
-                "Add Redis caching layer",
-                "Consider multi-region setup"
-            ],
-            "framework": "FastAPI",
-            "language": "Python",
-            "project_structure": {
-                "layered_architecture": True,
-                "separate_service_layer": True,
-                "repository_pattern": False,
-                "monolithic": False,
-                "microservice_ready": True,
-                "circular_imports_detected": False
-            },
-            "api_design": {
-                "route_count": 12,
-                "uses_dependency_injection": True,
-                "uses_pydantic_models": True,
-                "validation_present": True,
-                "pagination_supported": True
-            }
-        }
-        
-        print("✅ Architecture Agent completed (dummy output)")
-        agent_emitter.emit_agent_completed("architecture", dummy_output)
-        return {"architecture_output": dummy_output}
+        data_dir = os.path.join(os.path.dirname(__file__), "data")
+        azure_metrics = _load_json_if_present(os.path.join(data_dir, "azure_metrics.json"))
+        azure_cost = _load_json_if_present(os.path.join(data_dir, "azure_cost.json"))
+        code_summary = state.get("code_summarizer_output", {}) or {}
+
+        output = architecture_agent(code_summary, azure_metrics, azure_cost)
+        print("✅ Architecture Agent completed")
+        agent_emitter.emit_agent_completed("architecture", output)
+        return {"architecture_output": output}
     except Exception as e:
         print(f"❌ Architecture Agent failed: {str(e)}")
         agent_emitter.emit_agent_error("architecture", str(e))
@@ -82,43 +67,20 @@ def architecture_node(state: State) -> dict:
 def performance_node(state: State) -> dict:
     """
     Execute performance agent.
-    Currently returns dummy output for demo/testing.
     """
     print("⚡ Running Performance Agent")
     agent_emitter.emit_agent_started("performance")
     
     try:
-        # For demo purposes, return dummy output
-        dummy_output = {
-            "issues_detected": [
-                "CPU utilization consistently low (25%)",
-                "No dynamic scaling policies",
-                "Cold start latency detected"
-            ],
-            "recommendations": [
-                "Implement autoscaling rules",
-                "Configure pre-warming",
-                "Optimize connection pooling"
-            ],
-            "response_time_analysis": {
-                "average_response_time_ms": 145,
-                "p95_response_time_ms": 320,
-                "p99_response_time_ms": 580
-            },
-            "throughput": {
-                "requests_per_second": 450,
-                "concurrent_connections_capacity": 1000,
-                "current_load_percentage": 35
-            },
-            "bottlenecks": [
-                "Database query on user endpoint taking 120ms",
-                "Serialization overhead in list endpoints"
-            ]
-        }
-        
-        print("✅ Performance Agent completed (dummy output)")
-        agent_emitter.emit_agent_completed("performance", dummy_output)
-        return {"performance_output": dummy_output}
+        data_dir = os.path.join(os.path.dirname(__file__), "data")
+        azure_metrics = _load_json_if_present(os.path.join(data_dir, "azure_metrics.json"))
+        azure_cost = _load_json_if_present(os.path.join(data_dir, "azure_cost.json"))
+        code_summary = state.get("code_summarizer_output", {}) or {}
+
+        output = performance_agent(code_summary, azure_metrics, azure_cost)
+        print("✅ Performance Agent completed")
+        agent_emitter.emit_agent_completed("performance", output)
+        return {"performance_output": output}
     except Exception as e:
         print(f"❌ Performance Agent failed: {str(e)}")
         agent_emitter.emit_agent_error("performance", str(e))
@@ -134,38 +96,10 @@ def finops_node(state: State) -> dict:
     agent_emitter.emit_agent_started("finops")
     
     try:
-        # Get Azure metrics and costs from data
-        import os
-        from agents.finops import finops_agent, mock_azure_metrics, mock_azure_cost
-        
-        data_dir = os.path.join(os.path.dirname(__file__), 'data')
-        
-        azure_metrics_path = os.path.join(data_dir, 'azure_metrics.json')
-        azure_cost_path = os.path.join(data_dir, 'azure_cost.json')
-        
-        # Default to mock data
-        azure_metrics = mock_azure_metrics
-        azure_cost = mock_azure_cost
-        
-        # Try to load from files, fallback to mock data if files are empty or invalid
-        try:
-            if os.path.exists(azure_metrics_path) and os.path.getsize(azure_metrics_path) > 0:
-                with open(azure_metrics_path, 'r') as f:
-                    loaded_metrics = json.load(f)
-                    if loaded_metrics:  # Only use if not empty
-                        azure_metrics = loaded_metrics
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"⚠️  Could not load azure_metrics.json, using mock data: {str(e)}")
-        
-        try:
-            if os.path.exists(azure_cost_path) and os.path.getsize(azure_cost_path) > 0:
-                with open(azure_cost_path, 'r') as f:
-                    loaded_cost = json.load(f)
-                    if loaded_cost:  # Only use if not empty
-                        azure_cost = loaded_cost
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"⚠️  Could not load azure_cost.json, using mock data: {str(e)}")
-        
+        data_dir = os.path.join(os.path.dirname(__file__), "data")
+        azure_metrics = _load_json_if_present(os.path.join(data_dir, "azure_metrics.json"))
+        azure_cost = _load_json_if_present(os.path.join(data_dir, "azure_cost.json"))
+
         output = finops_agent(azure_metrics, azure_cost)
         print("✅ FinOps Agent completed")
         agent_emitter.emit_agent_completed("finops", output)

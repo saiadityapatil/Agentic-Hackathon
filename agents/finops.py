@@ -8,38 +8,7 @@ load_dotenv()
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 llm = ChatGroq(model_name="llama-3.1-8b-instant", temperature=0.5)
 
-mock_azure_metrics = {
-    "app_service": {
-        "cpu_utilization": "25%",
-        "memory_utilization": "40%",
-        "instance_count": 2,
-        "autoscaling_enabled": False
-    },
-    "sql_database": {
-        "dtus": 100,
-        "utilization": "60%",
-        "cost_per_month": "$200"
-    },
-    "storage_account": {
-        "total_storage_gb": 500,
-        "active_storage_gb": 50,
-        "cost_per_month": "$50"
-    }
-}
-
-mock_azure_cost = {
-    "app_service": {
-        "cost_per_month": "$300"
-    },
-    "sql_database": {
-        "cost_per_month": "$200"
-    },
-    "storage_account": {
-        "cost_per_month": "$50"
-    }
-}
-
-def finops_agent(azure_metrics=mock_azure_metrics, azure_cost=mock_azure_cost):
+def finops_agent(azure_metrics: dict, azure_cost: dict):
   prompt = f"""You are a Senior Azure FinOps Architect.
 
   Your responsibility is STRICTLY cost optimization.
@@ -145,20 +114,11 @@ def finops_agent(azure_metrics=mock_azure_metrics, azure_cost=mock_azure_cost):
       response = llm.invoke(prompt)
       response_text = response.content.strip() if response and response.content else ""
       
-      # Check if response is empty
       if not response_text:
-          print("⚠️ FinOps Agent received empty response from LLM")
           return {
-              "cost_inefficiencies": [{
-                  "issue_detected": "Unable to analyze cost data",
-                  "recommendation": "Ensure Azure metrics and cost data are properly loaded",
-                  "estimated_savings": "Unknown",
-                  "risk_level": "Low",
-                  "affected_services": [],
-                  "confidence_level": "Low"
-              }],
-              "total_potential_savings": "Unknown",
-              "analysis_status": "incomplete"
+              "analysis_status": "failed",
+              "error": "FinOps agent received empty response from LLM",
+              "cost_inefficiencies": [],
           }
       
       proposals = []
@@ -172,35 +132,27 @@ def finops_agent(azure_metrics=mock_azure_metrics, azure_cost=mock_azure_cost):
               proposals = json.loads(response_text)
           
           if not isinstance(proposals, list):
-              proposals = [{"issue_detected": "Analysis completed", "recommendation": response_text, "estimated_savings": "TBD", "risk_level": "Low", "affected_services": [], "confidence_level": "Low"}]
+              return {
+                  "analysis_status": "failed",
+                  "error": "FinOps agent returned non-array JSON",
+                  "raw_response": response_text[:2000],
+                  "cost_inefficiencies": [],
+              }
       except json.JSONDecodeError as e:
-          print(f"⚠️ Failed to parse JSON response: {str(e)}")
-          proposals = [{
-              "issue_detected": "Cost analysis completed with parsing note",
-              "recommendation": response_text[:200] if len(response_text) > 200 else response_text,
-              "estimated_savings": "TBD",
-              "risk_level": "Low",
-              "affected_services": [],
-              "confidence_level": "Low"
-          }]
+          return {
+              "analysis_status": "failed",
+              "error": f"Failed to parse FinOps JSON: {str(e)[:200]}",
+              "raw_response": response_text[:2000],
+              "cost_inefficiencies": [],
+          }
       
-      # Return as JSON object instead of list
       return {
           "cost_inefficiencies": proposals,
-          "total_potential_savings": "See individual recommendations",
           "analysis_status": "completed"
       }
   except Exception as e:
-      print(f"❌ FinOps Agent error: {str(e)}")
       return {
-          "cost_inefficiencies": [{
-              "issue_detected": f"FinOps analysis failed: {str(e)[:100]}",
-              "recommendation": "Review error logs and retry analysis",
-              "estimated_savings": "Error",
-              "risk_level": "Low",
-              "affected_services": [],
-              "confidence_level": "Low"
-          }],
-          "total_potential_savings": "Error",
-          "analysis_status": "failed"
+          "analysis_status": "failed",
+          "error": f"FinOps analysis failed: {str(e)[:200]}",
+          "cost_inefficiencies": [],
       }

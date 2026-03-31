@@ -1,10 +1,7 @@
 import os
 import json
-import re
-from typing import Dict, List, Any
-from langgraph.graph import StateGraph, END
+from typing import Dict, Any
 from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,169 +10,91 @@ os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 llm = ChatGroq(model_name="llama-3.1-8b-instant", temperature=0.5)
 
 
-def architecture_agent(state: "AgentState") -> Dict[str, Any]:
-    """Analyze infrastructure architecture and design patterns.
-    
-    Evaluates:
-    - Cloud topology and service patterns
-    - Scalability and reliability
-    - Architectural bottlenecks
-    - Design consistency
-    
-    Args:
-        state: Global agent state containing terraform_config and cloud_stats
-        
-    Returns:
-        Dictionary with architecture_feedback and negotiation_history updates
+def architecture_agent(code_summarizer_output: Dict[str, Any], azure_metrics: Dict[str, Any], azure_cost: Dict[str, Any]) -> Dict[str, Any]:
     """
-    terraform_content = state.get('terraform_config', '')
-    cloud_stats = state.get('cloud_stats', {})
-    history_context = "\n".join(state.get('negotiation_history', [])[-2:]) if state.get('negotiation_history') else ""
-    
-    # Format infrastructure details
-    infra_analysis = format_infrastructure_details(terraform_content, cloud_stats)
-    
-    prompt = f"""You are a Senior Cloud Architecture Reviewer analyzing infrastructure design.
+    Analyze architecture using code summarizer output plus Azure runtime + cost signals.
 
-Your role is to evaluate architectural patterns, scalability, reliability, and design quality.
+    Returns a JSON-serializable dict shaped similarly to other agents in this repo.
+    This agent must not invent resources/metrics/costs; it should be conservative when inputs are missing.
+    """
+    prompt = f"""You are a Senior Cloud Architecture Reviewer.
 
-You are NOT a performance engineer - focus on DESIGN and PATTERNS.
-You are NOT a cost optimizer - focus on ARCHITECTURE, not pricing.
+Your responsibility is STRICTLY architecture and reliability/scalability risk review.
+You are NOT a cost optimizer (FinOps will handle that).
+You are NOT a performance tuner (Performance agent will handle that).
 
-{infra_analysis}
+You must base your analysis ONLY on the provided inputs.
+Do NOT invent missing services, metrics, costs, resource names, or infrastructure components.
+If something is unknown, set fields to null/[] and add a note in issues_detected.
 
-{f'Previous context: {history_context}' if history_context else 'Perform initial architecture review.'}
+You must return between 3 and 5 distinct architecture issues and between 3 and 5 concrete recommendations.
 
-Evaluate the infrastructure architecture and provide findings on:
+-----------------------------------
+CODE SUMMARIZER OUTPUT (STRUCTURED JSON):
+{json.dumps(code_summarizer_output or {}, ensure_ascii=False)}
 
-1. Cloud Topology Assessment
-   - Service patterns and interrelationships
-   - Multi-region/zone strategy
-   - Load balancing approach
-   - Data persistence patterns
+-----------------------------------
+AZURE RUNTIME METRICS (JSON):
+{json.dumps(azure_metrics or {}, ensure_ascii=False)}
 
-2. Scalability & Reliability
-   - Horizontal/vertical scaling capability
-   - High availability design
-   - Failover mechanisms
-   - Single points of failure
+-----------------------------------
+AZURE COST DATA (JSON):
+{json.dumps(azure_cost or {}, ensure_ascii=False)}
 
-3. Architectural Bottlenecks
-   - Synchronous vs asynchronous patterns
-   - Database access patterns
-   - Network latency considerations
-   - State management approach
+-----------------------------------
+Return ONLY a valid JSON object (no markdown, no commentary).
 
-4. Design Quality
-   - Separation of concerns
-   - Dependency patterns
-   - Infrastructure-as-code quality
-   - Compliance with cloud best practices
+Schema:
+{{
+  "issues_detected": [string],
+  "recommendations": [string],
+  "architecture_style": string | null,
+  "cloud_topology": {{
+    "compute": string | null,
+    "database": string | null,
+    "storage": string | null,
+    "networking": string | null,
+    "caching_layer_present": boolean | null,
+    "autoscaling_enabled": boolean | null
+  }},
+  "scalability_assessment": {{
+    "horizontal_scaling_safe": boolean | null,
+    "bottleneck_component": string | null,
+    "scalability_risk_level": "Low" | "Medium" | "High" | "Unknown"
+  }},
+  "reliability_assessment": {{
+    "single_point_of_failure_detected": boolean | null,
+    "failover_strategy_detected": boolean | null,
+    "resilience_score": number | null
+  }}
+}}
+"""
 
-IMPORTANT: Return ONLY a valid JSON array. Start with [ and end with ]. Each object must have keys: finding, category, severity, recommendation, affected_services.
-
-Example format:
-[
-  {{"finding": "Monolithic architecture with synchronous database queries may limit horizontal scaling", "category": "Scalability", "severity": "Medium", "recommendation": "Implement asynchronous patterns and connection pooling", "affected_services": ["Compute", "Database"]}},
-  {{"finding": "Single database instance without replica detected - single point of failure", "category": "Reliability", "severity": "High", "recommendation": "Configure read replicas and automated failover", "affected_services": ["Database"]}}
-]"""
-    
-    response = llm.invoke([HumanMessage(content=prompt)])
-    response_text = response.content.strip()
-    
-    feedback = []
     try:
-        start_idx = response_text.find('[')
-        end_idx = response_text.rfind(']') + 1
-        if start_idx != -1 and end_idx > start_idx:
-            json_str = response_text[start_idx:end_idx]
-            feedback = json.loads(json_str)
-        else:
-            feedback = json.loads(response_text)
-        
-        if not isinstance(feedback, list):
-            feedback = [{"finding": response_text, "category": "Architecture", "severity": "Unknown", "recommendation": "N/A", "affected_services": []}]
-    except json.JSONDecodeError:
-        feedback = [{"finding": response_text, "category": "Architecture", "severity": "Unknown", "recommendation": "N/A", "affected_services": []}]
-    
-    arch_msg = f"ARCHITECTURE (Turn {state.get('turn_count', 0) + 1}):\n" + json.dumps(feedback, indent=2)
-    
-    return {
-        "architecture_feedback": feedback,
-        "negotiation_history": state.get('negotiation_history', []) + [arch_msg]
-    }
+        response = llm.invoke(prompt)
+        response_text = (response.content or "").strip() if response else ""
 
+        start_idx = response_text.find("{")
+        end_idx = response_text.rfind("}") + 1
+        json_str = response_text[start_idx:end_idx] if start_idx != -1 and end_idx > start_idx else response_text
+        parsed = json.loads(json_str)
+        if isinstance(parsed, dict):
+            # Enforce max 5 items for issues and recommendations (do not fabricate more)
+            if isinstance(parsed.get("issues_detected"), list):
+                parsed["issues_detected"] = parsed["issues_detected"][:5]
+            if isinstance(parsed.get("recommendations"), list):
+                parsed["recommendations"] = parsed["recommendations"][:5]
 
-def format_infrastructure_details(terraform_content: str, cloud_stats: Dict[str, Any]) -> str:
-    """Format infrastructure details from Terraform and cloud statistics.
-    
-    Args:
-        terraform_content: Terraform configuration file content
-        cloud_stats: Cloud service statistics and metrics
-        
-    Returns:
-        Formatted string with infrastructure analysis
-    """
-    resources = extract_resources_from_terraform(terraform_content)
-    
-    analysis = "Cloud Infrastructure Details:\n"
-    analysis += "=" * 70 + "\n"
-    
-    # Add detected resources
-    if resources:
-        analysis += "\nDetected Cloud Resources:\n"
-        for service, items in resources.items():
-            analysis += f"  - {service}: {len(items)} resource(s)\n"
-    
-    # Add cloud statistics
-    if cloud_stats:
-        analysis += "\nCloud Service Statistics & Metrics:\n"
-        for service, stats in cloud_stats.items():
-            analysis += f"  - {service}:\n"
-            if isinstance(stats, dict):
-                for key, value in stats.items():
-                    analysis += f"      {key}: {value}\n"
-            else:
-                analysis += f"      {stats}\n"
-    
-    # Add configuration excerpt
-    if terraform_content:
-        analysis += "\nConfiguration Excerpt:\n"
-        excerpt = terraform_content[:700]
-        analysis += excerpt + ("..." if len(terraform_content) > 700 else "")
-    
-    return analysis
+            parsed.setdefault("analysis_status", "completed")
+            return parsed
 
-
-def extract_resources_from_terraform(terraform_content: str) -> Dict[str, List[str]]:
-    """Extract cloud resource types from Terraform configuration.
-    
-    Args:
-        terraform_content: Terraform configuration content
-        
-    Returns:
-        Dictionary mapping service names to list of resource identifiers
-    """
-    resources = {}
-    
-    # AWS pattern: resource "aws_service_name" "name" { ... }
-    aws_pattern = r'resource\s+"(aws_[^"]+)"\s+"[^"]+"\s+\{'
-    aws_matches = re.findall(aws_pattern, terraform_content)
-    
-    for match in aws_matches:
-        service = match.split('_', 1)[1].upper().replace('_', ' ')
-        if service not in resources:
-            resources[service] = []
-        resources[service].append(match)
-    
-    # Azure pattern: resource "azurerm_service_name" "name" { ... }
-    azure_pattern = r'resource\s+"(azurerm_[^"]+)"\s+"[^"]+"\s+\{'
-    azure_matches = re.findall(azure_pattern, terraform_content)
-    
-    for match in azure_matches:
-        service = match.split('_', 1)[1].upper().replace('_', ' ')
-        if service not in resources:
-            resources[service] = []
-        resources[service].append(match)
-    
-    return resources
+        return {
+            "analysis_status": "failed",
+            "error": "LLM returned non-object JSON for architecture analysis",
+            "raw_response": response_text[:2000],
+        }
+    except Exception as e:
+        return {
+            "analysis_status": "failed",
+            "error": f"Architecture analysis failed: {str(e)[:200]}",
+        }
