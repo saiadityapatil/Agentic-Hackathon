@@ -5,11 +5,13 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 from graph import workflow
 from state import State
 from websocket_manager import manager
 from event_emitter import agent_emitter
 from metrics_extractor import get_metrics_extractor
+from data.azure_extractor import create_azure_extractor
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -28,14 +30,44 @@ app.add_middleware(
 )
 
 
-class AnalysisRequest(BaseModel):
-    """Request model for /analyze endpoint"""
-    repo_url: str = "https://github.com/Saiaditya004/agent-app.git"
+class MetricsRequest(BaseModel):
+    """Request model for /metrics endpoint"""
+    azure_client_id: Optional[str] = None
+    azure_client_secret: Optional[str] = None
+    azure_tenant_id: Optional[str] = None
+    azure_subscription_id: Optional[str] = None
+    resource_group_name: Optional[str] = None
     
     class Config:
         json_schema_extra = {
             "example": {
-                "repo_url": "https://github.com/your-username/your-repo"
+                "azure_client_id": "your-client-id",
+                "azure_client_secret": "your-client-secret",
+                "azure_tenant_id": "your-tenant-id",
+                "azure_subscription_id": "your-subscription-id",
+                "resource_group_name": "your-resource-group"
+            }
+        }
+
+
+class AnalysisRequest(BaseModel):
+    """Request model for /analyze endpoint"""
+    repo_url: str
+    azure_client_id: Optional[str] = None
+    azure_client_secret: Optional[str] = None
+    azure_tenant_id: Optional[str] = None
+    azure_subscription_id: Optional[str] = None
+    resource_group_name: Optional[str] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "repo_url": "https://github.com/your-username/your-repo",
+                "azure_client_id": "your-client-id",
+                "azure_client_secret": "your-client-secret",
+                "azure_tenant_id": "your-tenant-id",
+                "azure_subscription_id": "your-subscription-id",
+                "resource_group_name": "your-resource-group"
             }
         }
 
@@ -100,12 +132,14 @@ async def process_workflow_events(event_queue: Queue):
             await asyncio.sleep(0.1)
 
 
-async def run_workflow_with_events(repo_url: str, event_queue: Queue):
+async def run_workflow_with_events(repo_url: str, azure_credentials: Optional[dict], resource_group_name: Optional[str], event_queue: Queue):
     """
     Run the workflow in a thread pool and emit events to the queue.
     
     Args:
         repo_url: Repository URL to analyze
+        azure_credentials: Optional Azure service principal credentials
+        resource_group_name: Optional Azure resource group name
         event_queue: Queue to emit events to
         
     Returns:
@@ -120,6 +154,10 @@ async def run_workflow_with_events(repo_url: str, event_queue: Queue):
         # Initialize state
         initial_state: State = {
             "repo_url": repo_url,
+            "azure_credentials": azure_credentials,
+            "resource_group_name": resource_group_name,
+            "azure_metrics": None,
+            "azure_costs": None,
             "code_summarizer_output": None,
             "architecture_output": None,
             "performance_output": None,
@@ -130,6 +168,8 @@ async def run_workflow_with_events(repo_url: str, event_queue: Queue):
         
         print(f"\n{'='*60}")
         print(f"🚀 Starting Analysis for: {repo_url}")
+        if azure_credentials and resource_group_name:
+            print(f"🔵 Azure Resource Group: {resource_group_name}")
         print(f"{'='*60}\n")
         
         # Execute workflow
@@ -171,10 +211,16 @@ async def health_check():
     }
 
 
-@app.get("/metrics", tags=["Metrics"])
-async def get_metrics():
+@app.post("/metrics", tags=["Metrics"])
+async def get_metrics(request: Optional[MetricsRequest] = None):
     """
     Get current Azure metrics and cost data.
+    
+    If Azure credentials are provided, fetches live data from Azure.
+    Otherwise, returns data from static JSON files.
+    
+    Args:
+        request: Optional MetricsRequest with Azure credentials
     
     Returns:
         Dictionary containing:
@@ -184,10 +230,70 @@ async def get_metrics():
         - costs: Total monthly cost breakdown
     """
     try:
+        # Check if Azure credentials are provided
+        if request and all([
+            request.azure_client_id, 
+            request.azure_client_secret,
+            request.azure_tenant_id, 
+            request.azure_subscription_id,
+            request.resource_group_name
+        ]):
+            # Fetch live Azure data
+            print(f"🔵 Fetching live Azure metrics for resource group: {request.resource_group_name}")
+            
+            try:
+                extractor = create_azure_extractor(
+                    client_id=request.azure_client_id,
+                    client_secret=request.azure_client_secret,
+                    tenant_id=request.azure_tenant_id,
+                    subscription_id=request.azure_subscription_id,
+                    resource_group_name=request.resource_group_name
+                )
+                
+                azure_metrics = extractor.extract_all_metrics()
+                azure_costs = extractor.extract_all_costs()
+                
+                # Merge metrics and costs
+                metrics_data = {
+                    "app_service": {**azure_metrics.get("app_service", {}), **azure_costs.get("app_service", {})},
+                    "sql_database": {**azure_metrics.get("sql_database", {}), **azure_costs.get("sql_database", {})},
+                    "storage": {**azure_metrics.get("storage_account", {}), **azure_costs.get("storage_account", {})},
+                    "costs": {
+                        "total_monthly_cost": "$0",
+                        "services_breakdown": azure_costs
+                    }
+                }
+                
+                # Calculate total cost
+                total_cost = 0.0
+                for service_costs in azure_costs.values():
+                    cost_str = service_costs.get("cost_per_month", "$0")
+                    try:
+                        cost_value = float(cost_str.replace("$", "").replace(",", ""))
+                        total_cost += cost_value
+                    except (ValueError, AttributeError):
+                        pass
+                
+                metrics_data["costs"]["total_monthly_cost"] = f"${total_cost:.2f}"
+                
+                print("✅ Successfully fetched live Azure metrics")
+                
+                return {
+                    "status": "success",
+                    "source": "azure_live",
+                    "data": metrics_data
+                }
+            except Exception as e:
+                print(f"⚠️ Error fetching live Azure data: {str(e)}")
+                print("📁 Falling back to static JSON files")
+        
+        # Fall back to static JSON files
         metrics_extractor = get_metrics_extractor()
         metrics_data = metrics_extractor.get_all_metrics()
+        
         return {
             "status": "success",
+            "source": "static_files",
             "data": metrics_data
         }
     except Exception as e:
@@ -242,29 +348,51 @@ async def analyze_repository(request: AnalysisRequest):
     4. FinOps Agent: Analyzes cost optimization (parallel)
     5. Moderator Agent: Synthesizes all outputs into actionable recommendations
     
+    Optionally provide Azure credentials to fetch live Azure metrics and costs.
+    
     Note: Real-time agent completion updates are sent via WebSocket at /ws
     
     Args:
-        request: AnalysisRequest with repo_url
+        request: AnalysisRequest with repo_url and optional Azure credentials
         
     Returns:
         AnalysisResponse with complete analysis results
     """
     try:
-        # Use provided repo_url or default if empty
-        repo_url = request.repo_url.strip() if request.repo_url else "https://github.com/kubernetes/kubernetes"
+        # Validate and use provided repo_url
+        repo_url = request.repo_url.strip() if request.repo_url else ""
         
         if not repo_url:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid repo_url. Must be a non-empty string."
+                detail="repo_url is required. Must be a valid GitHub repository URL."
             )
+        
+        # Extract Azure credentials if provided
+        azure_credentials = None
+        resource_group_name = None
+        
+        if all([request.azure_client_id, request.azure_client_secret, 
+                request.azure_tenant_id, request.azure_subscription_id, 
+                request.resource_group_name]):
+            azure_credentials = {
+                "client_id": request.azure_client_id,
+                "client_secret": request.azure_client_secret,
+                "tenant_id": request.azure_tenant_id,
+                "subscription_id": request.azure_subscription_id
+            }
+            resource_group_name = request.resource_group_name
+            print(f"🔵 Azure credentials provided for resource group: {resource_group_name}")
+        else:
+            print("📁 No Azure credentials provided, using static data")
         
         # Create an event queue for this analysis
         event_queue: Queue = Queue()
         
         # Run workflow and process events concurrently
-        workflow_task = asyncio.create_task(run_workflow_with_events(repo_url, event_queue))
+        workflow_task = asyncio.create_task(
+            run_workflow_with_events(repo_url, azure_credentials, resource_group_name, event_queue)
+        )
         event_task = asyncio.create_task(process_workflow_events(event_queue))
         
         # Wait for workflow to complete
@@ -280,13 +408,41 @@ async def analyze_repository(request: AnalysisRequest):
         finops = result.get('finops_output') or {}
         moderator = result.get('moderator_output') or {}
         
-        # Get metrics data to include in response
-        try:
-            metrics_extractor = get_metrics_extractor()
-            metrics_data = metrics_extractor.get_all_metrics()
-        except Exception as e:
-            print(f"⚠️ Error fetching metrics: {str(e)}")
-            metrics_data = {}
+        # Get metrics data from workflow result (already fetched during workflow execution)
+        azure_metrics = result.get('azure_metrics') or {}
+        azure_costs = result.get('azure_costs') or {}
+        
+        # If we have live Azure data, format it properly
+        if azure_metrics and azure_costs:
+            metrics_data = {
+                "app_service": {**azure_metrics.get("app_service", {}), **azure_costs.get("app_service", {})},
+                "sql_database": {**azure_metrics.get("sql_database", {}), **azure_costs.get("sql_database", {})},
+                "storage": {**azure_metrics.get("storage_account", {}), **azure_costs.get("storage_account", {})},
+                "costs": {
+                    "total_monthly_cost": "$0",
+                    "services_breakdown": azure_costs
+                }
+            }
+            
+            # Calculate total cost
+            total_cost = 0.0
+            for service_costs in azure_costs.values():
+                cost_str = service_costs.get("cost_per_month", "$0")
+                try:
+                    cost_value = float(cost_str.replace("$", "").replace(",", ""))
+                    total_cost += cost_value
+                except (ValueError, AttributeError):
+                    pass
+            
+            metrics_data["costs"]["total_monthly_cost"] = f"${total_cost:.2f}"
+        else:
+            # Fallback to static metrics if no Azure data in result
+            try:
+                metrics_extractor = get_metrics_extractor()
+                metrics_data = metrics_extractor.get_all_metrics()
+            except Exception as e:
+                print(f"⚠️ Error fetching metrics: {str(e)}")
+                metrics_data = {}
         
         # Return structured response with all agent outputs and metrics
         return AnalysisResponse(
